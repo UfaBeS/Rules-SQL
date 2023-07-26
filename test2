@@ -1,0 +1,127 @@
+create procedure syn.usp_ImportFileCustomerSeasonal
+	@ID_Record int
+as
+set nocount on
+begin
+	declare @RowCount int = (select count(*) from syn.SA_CustomerSeasonal) 
+    /* 
+        Содержимое скобок переносится на следующую строку 
+    */
+	declare @ErrorMessage varchar(max)
+    /* 
+        Для объявления переменных declare используется один раз. Дальнейшее
+        переменные перечисляются через запятую с новой строки, если явно не требуется
+        писать declare 
+    */
+
+-- Проверка на корректность загрузки 
+    /* 
+        Комментарий должен быть с таким же отступом как и код, к которому он
+        относится 
+    */
+	if not exists (
+    /*
+        В условных операторах весь блок смещается на 1 отступ 
+    */
+	select 1
+	from syn.ImportFile as f 
+    /* 
+        При наименовании алиаса использовать первые заглавные буквы каждого слова в названии объекта, 
+        которому дают алиас. В случае, если алиас представляет собой системное слово, то добавляем первую согласную
+        букву после заглавной из первого слова. (as imf) 
+    */
+	where f.ID = @ID_Record
+		and f.FlagLoaded = cast(1 as bit)
+        /*
+            Рекомендуется избегать неявных преобразований в типах данных: Преобразуем значение в bit, так как `1` значение типа int
+        */
+	)
+		begin
+        /* 
+            if и else с begin/end должны быть на одном уровне 
+        */
+			set @ErrorMessage = 'Ошибка при загрузке файла, проверьте корректность данных'
+
+			raiserror(@ErrorMessage, 3, 1)
+			return
+            /* 
+                Должна быть пустая строка перед return 
+            */
+		end
+
+	CREATE TABLE #ProcessedRows(ActionType varchar(255), ID int)
+	/*
+        Пробел нужен между скобкой и созданием объекта
+    */
+	--Чтение из слоя временных данных
+	select
+		cc.ID as ID_dbo_Customer
+		,cst.ID as ID_CustomerSystemType
+		,s.ID as ID_Season
+		,cast(sa.DateBegin as date) as DateBegin
+		,cast(sa.DateEnd as date) as DateEnd
+		,cd.ID as ID_dbo_CustomerDistributor
+		,cast(isnull(sa.FlagActive, 0) as bit) as FlagActive
+	into #CustomerSeasonal
+	from syn.SA_CustomerSeasonal cs
+    /*
+        Алиас обязателен для объекта и задается с помощью ключевого слова as
+    */ 
+		join dbo.Customer as cc on cc.UID_DS = sa.UID_DS_Customer
+		    and cc.ID_mapping_DataSource = 1
+		join dbo.Season as s on s.Name = sa.Season
+		join dbo.Customer as cd on cd.UID_DS = sa.UID_DS_CustomerDistributor
+			and cd.ID_mapping_DataSource = 1
+		join syn.CustomerSystemType as cst on sa.CustomerSystemType = cst.Name
+        /*
+            При соединение двух таблиц, сперва после on указываем поле присоединяемой
+            таблицы
+        */
+	where try_cast(sa.DateBegin as date) is not null
+		and try_cast(sa.DateEnd as date) is not null
+		and try_cast(isnull(sa.FlagActive, 0) as bit) is not null
+        /*
+            Рекомендуется писать проверки только для DDL инструкций
+        */
+
+	-- Определяем некорректные записи
+	-- Добавляем причину, по которой запись считается некорректной
+	select
+    /*
+        Пробелов не должно быть при вызове функций 
+    */
+		sa.*
+		,case
+        /*
+            При написании конструкции с case , необходимо, чтобы when был
+            под case с 1 отступом
+        */
+			when cc.ID is null then 'UID клиента отсутствует в справочнике "Клиент"'
+			when cd.ID is null then 'UID дистрибьютора отсутствует в справочнике "Клиент"'
+			when s.ID is null then 'Сезон отсутствует в справочнике "Сезон"'
+			when cst.ID is null then 'Тип клиента в справочнике "Тип клиента"'
+			when try_cast(sa.DateBegin as date) is null then 'Невозможно определить Дату начала'
+			when try_cast(sa.DateEnd as date) is null then 'Невозможно определить Дату начала'
+			when try_cast(isnull(sa.FlagActive, 0) as bit) is null then 'Невозможно определить Активность'
+            /*
+                Результат на 1 отступ от when (При написании конструкции с case , необходимо, чтобы when был
+                под case с 1 отступом, then с 2 отступами)
+            */
+		end as Reason
+	into #BadInsertedRows
+	from syn.SA_CustomerSeasonal as cs
+	left join dbo.Customer as cc on cc.UID_DS = sa.UID_DS_Customer
+		and cc.ID_mapping_DataSource = 1
+	left join dbo.Customer as cd on cd.UID_DS = sa.UID_DS_CustomerDistributor and cd.ID_mapping_DataSource = 1
+	left join dbo.Season as s on s.Name = sa.Season
+	left join syn.CustomerSystemType as cst on cst.Name = sa.CustomerSystemType
+	where cc.ID is null
+		or cd.ID is null
+		or s.ID is null
+		or cst.ID is null
+		or try_cast(sa.DateBegin as date) is null
+		or try_cast(sa.DateEnd as date) is null
+		or try_cast(isnull(sa.FlagActive, 0) as bit) is null
+
+		
+end
